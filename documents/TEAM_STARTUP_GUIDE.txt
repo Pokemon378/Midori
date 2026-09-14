@@ -1,0 +1,280 @@
+================================================================
+  MIDORI - CROP HEALTH INTELLIGENCE PLATFORM
+  Teammate Startup Guide (Backend)
+================================================================
+
+SIH 2026 | Problem Statement: SIH26131
+Early detection and management of crop diseases and pest infestations
+
+Backend stack: Python 3.13, FastAPI, PostgreSQL 16, SQLAlchemy, Pytest
+
+----------------------------------------------------------------
+1. WHAT THIS PROJECT IS
+----------------------------------------------------------------
+
+Midori is a software-only crop health monitoring prototype. There are
+NO physical sensors. Sensor readings are simulated in software and
+sent to the backend API. The backend stores data in PostgreSQL and
+computes monitoring features per crop zone.
+
+Current modules (Steps 1-4, all complete):
+
+  Farm -> Zone -> Crop -> Sensor Readings -> Feature Engine
+
+The Feature Engine prepares contextual indicators (statistics, trends,
+rates of change). Risk scoring and AI disease detection are future
+steps, deliberately NOT in this build yet.
+
+----------------------------------------------------------------
+2. PREREQUISITES - INSTALL THESE FIRST
+----------------------------------------------------------------
+
+a) Python 3.11 or newer
+   Download: https://www.python.org/downloads/
+   During install, TICK "Add Python to PATH".
+
+   Verify (open a NEW terminal after install):
+       python --version
+   You should see Python 3.11+ printed.
+
+b) PostgreSQL 16
+   Download: https://www.postgresql.org/download/windows/
+   Run the installer. IMPORTANT:
+   - When asked, set a password for the "postgres" user.
+     REMEMBER THIS PASSWORD - you will need it in step 4.
+   - Keep the default port: 5432
+   - Leave all other options default.
+
+   Verify it is running:
+       Win+R -> services.msc -> look for "postgresql-x64-16"
+       Status should be "Running".
+
+   (Optional but recommended) Graphical DB browser:
+   pgAdmin 4 is installed automatically with PostgreSQL.
+
+c) Git
+   Download: https://git-scm.com/download/win
+   Verify: git --version
+
+d) A code editor: VS Code (https://code.visualstudio.com/)
+
+----------------------------------------------------------------
+3. GET THE PROJECT
+----------------------------------------------------------------
+
+Option A - from GitHub (if the team repo is up):
+    git clone https://github.com/<team-username>/midori.git
+    cd midori/backend
+
+Option B - copy the "backend" folder from the team shared drive
+and place it anywhere, e.g. C:\projects\midori\backend
+
+All commands below are run from inside the "backend" folder.
+
+----------------------------------------------------------------
+4. CONFIGURE THE DATABASE (ONE TIME)
+----------------------------------------------------------------
+
+a) Create two databases. Open "SQL Shell (psql)" from the Start
+   menu (it was installed with PostgreSQL). Log in as "postgres"
+   with the password you set during installation, then run:
+
+       CREATE DATABASE midori;
+       CREATE DATABASE midori_test;
+
+   (midori = development DB, midori_test = automated tests use
+   this one so your dev data is never touched by tests.)
+
+b) Create your environment file. In the backend folder, copy
+   ".env.example" and rename the copy to ".env" (no extension).
+
+   Open .env in a text editor and put YOUR postgres password in it:
+
+       DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/midori
+       TEST_DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/midori_test
+
+   NOTES:
+   - If your password contains special characters like @ : / #,
+     URL-encode them or ask Vasanth for help.
+   - NEVER commit .env to Git. It is already listed in .gitignore.
+
+----------------------------------------------------------------
+5. SET UP PYTHON ENVIRONMENT (ONE TIME)
+----------------------------------------------------------------
+
+Open a terminal (PowerShell or CMD) in the backend folder, then:
+
+    python -m venv venv
+    venv\Scripts\activate
+
+You should see (venv) appear at the start of your prompt.
+If PowerShell blocks the script, run this once and retry:
+
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+Then install dependencies:
+
+    pip install -r requirements.txt
+
+This installs: fastapi, uvicorn, sqlalchemy, psycopg2-binary,
+python-dotenv, pytest, httpx. Nothing else.
+
+----------------------------------------------------------------
+6. RUN THE BACKEND
+----------------------------------------------------------------
+
+    uvicorn app.main:app --reload
+
+First run automatically creates all tables (farms, zones, crops,
+sensor_readings) in the midori database.
+
+Keep this terminal open - the server runs here. To stop: Ctrl+C.
+
+----------------------------------------------------------------
+7. OPEN AND USE THE API
+----------------------------------------------------------------
+
+Swagger UI (interactive docs - click any endpoint, "Try it out"):
+    http://127.0.0.1:8000/docs
+
+ReDoc (readable reference):
+    http://127.0.0.1:8000/redoc
+
+Quick sanity checks in your browser:
+    http://127.0.0.1:8000/         -> {"message": "Midori backend is running"}
+    http://127.0.0.1:8000/health   -> {"status": "ok"}
+
+TRY THE CORE FLOW (in /docs, in this order):
+
+  1) POST /farms
+       {"name": "Farm 01", "location": "Maharashtra", "area_acres": 5.0}
+  2) POST /farms/1/zones
+       {"name": "Zone A"}
+  3) POST /zones/1/crop
+       {"crop_name": "Tomato", "crop_stage": "Vegetative",
+        "sowing_date": "2026-08-01"}
+  4) POST /zones/1/sensor-readings   (timestamp = now, ISO 8601)
+       {"timestamp": "2026-09-15T10:00:00+05:30",
+        "temperature": 29.4, "humidity": 86, "rainfall": 12.5,
+        "leaf_wetness": 78, "soil_moisture": 64, "pest_activity": 7}
+  5) GET /zones/1/features?window=1h
+       -> statistics, trends, rate of change, leaf-wetness duration
+
+----------------------------------------------------------------
+8. RUN THE TESTS
+----------------------------------------------------------------
+
+    pytest
+
+Expected: 52 passed. Tests run against the midori_test database
+(configured in .env) - your development data is safe.
+
+If tests fail with a connection error, re-check .env and that the
+PostgreSQL service is running (step 2b and 4).
+
+----------------------------------------------------------------
+9. TROUBLESHOOTING
+----------------------------------------------------------------
+
+"DATABASE_URL is not set"
+    -> .env file missing or not named exactly ".env" in backend/.
+
+"password authentication failed for user postgres"
+    -> Wrong password in .env. Re-enter it (step 4b).
+
+"connection refused port 5432"
+    -> PostgreSQL service not running. Start it from services.msc
+       or: net start postgresql-x64-16   (admin terminal)
+
+Port 8000 already in use
+    -> Another app owns 8000. Run instead:
+       uvicorn app.main:app --reload --port 8001
+       (then use http://127.0.0.1:8001)
+
+"pytest: command not found"
+    -> venv not activated. Run: venv\Scripts\activate
+
+Tables missing / relation does not exist
+    -> Delete nothing; just restart the server once. Tables are
+       created automatically at startup.
+
+----------------------------------------------------------------
+10. SHOWING THE APP TO OTHERS ON THE SAME WI-FI (DEMO MODE)
+----------------------------------------------------------------
+
+By default the server only accepts connections from your own PC.
+To let teammates open it on their laptop/phone (same Wi-Fi):
+
+    uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+Find your PC IP: run  ipconfig  -> look for "IPv4 Address"
+(e.g. 192.168.1.42). Teammates then open:
+
+    http://192.168.1.42/docs     (use your actual IP)
+
+Allow Windows Firewall access when prompted the first time.
+Limitations: works only on the same network, your PC must stay on,
+and there is no login/authentication yet - fine for demos.
+
+----------------------------------------------------------------
+11. PROJECT LAYOUT (WHAT LIVES WHERE)
+----------------------------------------------------------------
+
+backend/
+  app/
+    main.py            FastAPI app, includes all routers
+    database.py        Engine, SessionLocal, get_db(), Base
+    api/               HTTP endpoints
+      farms.py         POST/GET /farms, GET /farms/{id}
+      zones.py         zones under a farm, GET /zones/{id}
+      crops.py         crop per zone
+      sensor_readings.py  POST/GET sensor readings, GET latest
+      features.py      GET /zones/{id}/features
+    models/            SQLAlchemy tables (farm, zone, crop,
+                       sensor_reading)
+    schemas/           Pydantic request/response validation
+    features/          Feature Engine (calculations.py = pure
+                       math, service.py = windowing + assembly)
+  tests/               pytest suite (52 tests)
+  .env                 YOUR secrets - never committed
+  .env.example         template - committed
+  requirements.txt     pinned dependencies
+
+Data model:
+    Farm 1--* Zone 1--1 Crop
+    Zone 1--* SensorReading
+
+Feature Engine windows: 30m, 1h, 6h, 24h
+Trend values: increasing / decreasing / stable / insufficient_data
+(The Feature Engine does NOT score risk or diagnose disease.)
+
+----------------------------------------------------------------
+12. TEAM RULES FOR CONTRIBUTING
+----------------------------------------------------------------
+
+1. Always work with the venv activated.
+2. Never edit .env or commit it. Never hardcode passwords in code.
+3. Create a branch per task:
+       git checkout -b feature/your-feature-name
+   Commit small and often with clear messages.
+4. Run  pytest  before pushing. All 52 tests must pass.
+5. New endpoints need: schema validation, 404 handling for missing
+   resources, and tests. Match the existing code style.
+6. Database changes: update the model, add tests, tell the team -
+   table creation is automatic on startup (no Alembic yet).
+7. Questions: ask Vasanth (Development Lead / backend).
+
+----------------------------------------------------------------
+QUICK START (COPY-PASTE SUMMARY)
+----------------------------------------------------------------
+
+    git clone <repo-url>          # or copy folder
+    cd midori/backend
+    # create .env from .env.example with your postgres password
+    python -m venv venv
+    venv\Scripts\activate
+    pip install -r requirements.txt
+    uvicorn app.main:app --reload
+
+    # open http://127.0.0.1:8000/docs
+    # run tests:  pytest
