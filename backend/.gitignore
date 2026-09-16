@@ -15,6 +15,15 @@ __pycache__/
 .env
 .env.*
 
+# Uploaded image storage (runtime data, not source)
+storage/
+
+# AI model checkpoints (large binaries — install via scripts/download_models.py)
+models/disease/*.safetensors
+models/disease/*.pth
+models/pest/*.pt
+models/pest/*.yaml
+
 # Editors
 .vscode/
 .idea/

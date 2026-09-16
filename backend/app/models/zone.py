@@ -11,6 +11,8 @@ from app.database import Base
 if TYPE_CHECKING:
     from app.models.crop import Crop
     from app.models.farm import Farm
+    from app.models.image_metadata import ImageMetadata
+    from app.models.risk_assessment import RiskAssessment
     from app.models.sensor_reading import SensorReading
 
 
@@ -33,5 +35,11 @@ class Zone(Base):
         back_populates="zone", uselist=False, cascade="all, delete-orphan"
     )
     sensor_readings: Mapped[List["SensorReading"]] = relationship(
+        back_populates="zone", cascade="all, delete-orphan"
+    )
+    images: Mapped[List["ImageMetadata"]] = relationship(
+        back_populates="zone", cascade="all, delete-orphan"
+    )
+    risk_assessments: Mapped[List["RiskAssessment"]] = relationship(
         back_populates="zone", cascade="all, delete-orphan"
     )

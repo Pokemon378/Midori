@@ -20,7 +20,14 @@ from sqlalchemy.pool import StaticPool
 from app.main import app
 
 from app.database import Base, get_db
-from app.models import crop, farm, zone  # noqa: F401,E402  (register models)
+from app.models import (  # noqa: F401,E402  (register models)
+    crop,
+    farm,
+    image_metadata,
+    risk_assessment,
+    sensor_reading,
+    zone,
+)
 
 
 @pytest.fixture()

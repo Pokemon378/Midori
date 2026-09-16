@@ -4,7 +4,7 @@ SIH 2026 project for problem statement **SIH26131 — Early detection and manage
 
 A completely software-based prototype: sensor data is generated through a Digital Farm Simulator, and camera events/images are simulated or replayed. No physical IoT hardware is required for the MVP.
 
-**Current stage:** Step 4 — Feature Engine (contextual monitoring features per zone; no risk scoring yet).
+**Current stage:** Step 6 — Camera/Image Intake + Image Quality (images prepared and validated for future AI analysis; no diagnosis yet).
 
 ## Tech Stack
 
@@ -234,14 +234,180 @@ when elapsed time is zero or fewer than 2 observations exist.
 }
 ```
 
-## Project Structure (Step 4)
+## Step 5 — Risk Engine
+
+The Feature Engine answers **"what is happening?"** in a zone. The Risk Engine answers **"how risky are the current conditions?"** by consuming the Feature Engine output — it never touches raw sensor readings and never diagnoses disease.
+
+> **Scientific limitation:** This MVP risk score is an explainable environmental risk indicator and is **not a disease diagnosis or scientifically validated disease probability**. Weights and thresholds are initial values intended to be tuned after agricultural validation.
+
+### Endpoint
+
+```
+GET /zones/{zone_id}/risk?window=1h     # window: 30m | 1h (default) | 6h | 24h
+```
+
+The pipeline:
+
+```
+Sensor Readings → Feature Engine → Risk Engine → risk score / level / factors / camera_trigger
+```
+
+### Risk score
+
+A deterministic **environmental crop-health risk score (0–100)** computed from configurable factor scores (`RISK_FACTOR_THRESHOLDS` in `app/risk/calculations.py`) and weights (`RISK_WEIGHTS`): humidity, leaf wetness (value + active duration), temperature, recent rainfall, soil moisture, pest activity (value + trend), and a combination bonus when many factors coincide.
+
+### Risk levels (configurable)
+
+| Score | Level |
+|-------|-------|
+| 0–24 | LOW |
+| 25–49 | MEDIUM |
+| 50–74 | HIGH |
+| 75–100 | CRITICAL |
+
+### Explainable factors
+
+Each assessment returns deterministic reason codes with fixed explanation text: `HIGH_HUMIDITY`, `INCREASING_HUMIDITY`, `ELEVATED_LEAF_WETNESS`, `PROLONGED_LEAF_WETNESS`, `HIGH_PEST_ACTIVITY`, `INCREASING_PEST_ACTIVITY`, `RECENT_RAINFALL`, `LOW_SOIL_MOISTURE`, `ELEVATED_TEMPERATURE`, `MULTIPLE_FACTORS`.
+
+### Risk trend
+
+Every assessment is stored in the `risk_assessments` table. The trend compares the current level with the previous stored assessment for the same zone/window: `increasing`, `decreasing`, `stable`, or `insufficient_data` (first-ever assessment).
+
+### Camera trigger
+
+`camera_trigger: true` (a software decision only — no image is captured) when:
+- risk level is HIGH or CRITICAL, **or**
+- humidity + pest-activity rates of change spike (sum ≥ configurable threshold), **or**
+- many significant factors coincide.
+
+The future Camera/Image Intake module will consume this decision.
+
+### Insufficient data
+
+If the zone has no sensor data in the window, the API returns HTTP 200 with `risk_score: null`, `risk_level: "INSUFFICIENT_DATA"`, `camera_trigger: false` — no fake score is invented. Nonexistent zone → 404; invalid window → 400.
+
+### Example response (verified live)
+
+```json
+{
+  "zone_id": 2,
+  "window": "1h",
+  "risk_score": 76.0,
+  "risk_level": "CRITICAL",
+  "risk_trend": "insufficient_data",
+  "camera_trigger": true,
+  "risk_factors": [
+    {"code": "HIGH_HUMIDITY", "observation": "96%", "effect": "increases_risk",
+     "reason": "High humidity can create favorable conditions for some crop diseases."},
+    {"code": "PROLONGED_LEAF_WETNESS", "observation": "45 minutes", "effect": "increases_risk",
+     "reason": "Leaf wetness has remained elevated for a prolonged period."},
+    {"code": "MULTIPLE_FACTORS", "observation": "7 factors", "effect": "increases_risk",
+     "reason": "Multiple environmental risk factors are present at the same time."}
+  ],
+  "generated_at": "2026-09-15T05:47:35.280266Z"
+}
+```\n
+## Step 6 — Camera/Image Intake + Image Quality
+
+**Step 6 prepares and validates images for future AI analysis. It does not perform disease or pest diagnosis.**
+
+The Risk Engine's `camera_trigger` decision (Step 5) flows here: when visual inspection is warranted, an image is received, quality-checked and marked ready for the future AI Vision step.
+
+```
+Risk Engine (camera_trigger=true)
+      ↓
+POST /zones/{zone_id}/images
+      ↓
+validation + quality checks
+      ↓
+READY_FOR_AI  →  [Step 7 — AI Vision]
+```
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/zones/{zone_id}/images` | Upload an image (multipart/form-data) |
+| GET | `/zones/{zone_id}/images?limit=50` | List image metadata for a zone (1–500) |
+| GET | `/images/{image_id}` | Get metadata for one image |
+
+### Supported formats & limits (configurable)
+
+- Formats: JPEG/JPG, PNG, WEBP — actual decoding is verified with Pillow, not just the file extension
+- Max file size: 10 MB (`IMAGE_MAX_FILE_SIZE`)
+- Minimum resolution: 200×200 (`IMAGE_MIN_WIDTH` / `IMAGE_MIN_HEIGHT`)
+- Source field: `uploaded` (default), `simulated_camera`, `replayed`
+
+### Storage
+
+Files are stored on the local filesystem (metadata in PostgreSQL):
+
+```
+storage/images/zone_1/<uuid>.jpg
+storage/images/zone_2/<uuid>.png
+```
+
+Storage names are generated UUIDs — the client filename is never trusted (path-traversal safe, no overwrites).
+
+### Quality checks (`app/images/quality.py`)
+
+- **Resolution** — below minimum → LOW_QUALITY with reason
+- **Blur** — Laplacian variance of the grayscale image (higher = sharper); threshold `IMAGE_BLUR_THRESHOLD` (default 60)
+- **Brightness** — mean grayscale intensity 0–255; too dark < 50, too bright > 215 (configurable)
+
+### Quality statuses
+
+| Status | Meaning |
+|---|---|
+| `READY_FOR_AI` | Accepted — suitable for later AI analysis |
+| `LOW_QUALITY` | Valid image but poor resolution/blur/exposure |
+| `REJECTED` | Invalid/corrupted/unsupported/oversized (HTTP 400) |
+
+Quality assessment is about image suitability only — it never labels an image "diseased" or "healthy".
+
+### Example response (verified live)
+
+```json
+{
+  "id": 1,
+  "zone_id": 2,
+  "filename": "live_test_crop.jpg",
+  "content_type": "image/jpeg",
+  "file_size": 183075,
+  "width": 640,
+  "height": 480,
+  "quality_status": "READY_FOR_AI",
+  "source": "simulated_camera",
+  "quality": {
+    "blur_score": 134805.27,
+    "blur_status": "acceptable",
+    "brightness_score": 127.35,
+    "brightness_status": "acceptable"
+  },
+  "reasons": [],
+  "created_at": "..."
+}
+```
+
+### Security
+
+- MIME type validated and image actually decoded before acceptance
+- Corrupted/undecodable files rejected (HTTP 400)
+- Client filenames sanitized; storage names are UUIDs
+- Path traversal prevented; arbitrary filesystem paths never exposed
+- Max file size enforced
+
+## Project Structure (Step 6)
 
 ```
 backend/
 ├── app/
-│   ├── api/         # FastAPI routers (farms, zones, crops)
-│   ├── models/      # SQLAlchemy ORM models
-│   ├── schemas/     # Pydantic request/response schemas
+│   ├── api/         # FastAPI routers (farms, zones, crops, sensor_readings, features, risk)
+│   ├── models/      # SQLAlchemy ORM models (incl. risk_assessment)
+│   ├── schemas/     # Pydantic request/response schemas (incl. risk)
+│   ├── features/    # Feature Engine (calculations + service)
+│   ├── risk/        # Risk Engine (calculations + service)
+│   ├── images/      # Image intake (quality + storage + service)
 │   ├── database.py  # Engine, SessionLocal, Base, get_db dependency
 │   └── main.py      # FastAPI application
 ├── tests/
@@ -249,6 +415,28 @@ backend/
 └── requirements.txt
 ```
 
+## AI Vision — Future Step (intentionally postponed)
+
+Step 7 (AI Vision) is **intentionally not implemented** in this development cycle.
+The Image Intake module prepares images and marks passing images `READY_FOR_AI` —
+which means *ready for future AI analysis*, **not** analyzed. No disease diagnosis,
+AI confidence, or severity is produced by the current system. See
+[docs/AI_BOUNDARY.md](docs/AI_BOUNDARY.md).
+
+## Documentation
+
+Full engineering documentation lives in [`docs/`](docs/):
+
+- [PROJECT_AUDIT.md](docs/PROJECT_AUDIT.md) — module-by-module audit of what exists
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — system pipeline, layering, data-flow guarantees
+- [COMPLETED_FEATURES.md](docs/COMPLETED_FEATURES.md) — what/why/how per step (1–6)
+- [DATABASE_DESIGN.md](docs/DATABASE_DESIGN.md) — tables, relationships, rules
+- [API_REFERENCE.md](docs/API_REFERENCE.md) — every endpoint with inputs/errors/examples
+- [TEST_REPORT.md](docs/TEST_REPORT.md) — 103/103 passing + live verification
+- [SECURITY.md](docs/SECURITY.md) — secrets, upload hardening, known gaps
+- [DEVELOPER_RUNBOOK.md](docs/DEVELOPER_RUNBOOK.md) — setup, run, test, troubleshoot
+- [AI_BOUNDARY.md](docs/AI_BOUNDARY.md) — the AI boundary and design commitments
+
 ## Roadmap
 
-Future modules (not yet implemented): Digital Farm Simulator → Data Gateway → Validation → Feature Engine → Risk Engine → Targeted Camera Event → Image Intake → AI Vision → Confidence Gate → Expert Validation → Advisory → Alerts → Follow-up → GIS / Frontend.
+Future modules (not yet implemented): Digital Farm Simulator → Data Gateway → Validation → Targeted Camera Event → AI Vision (next major stage) → Confidence Gate → Expert Validation → Advisory → Alerts → Follow-up → GIS / Frontend.
